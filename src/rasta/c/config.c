@@ -5,13 +5,19 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <rmemory.h>
-#include <ifaddrs.h>
+
 #include <sys/types.h>
 #include <sys/ioctl.h>
-#include <sys/socket.h>
+#ifndef PIKEOS_TOOLCHAIN
+#include <ifaddrs.h>
 #include <linux/wireless.h>
-#include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
+#else
+#include <lwip/sockets.h>
+#endif // PIKEOS_TOOLCHAIN
+
+#include <unistd.h>
 #include "config.h"
 #include "stdio.h"
 #include "string.h"
@@ -65,7 +71,7 @@ int parser_next(struct LineParser *p) {
 void parser_skipBlanc(struct LineParser* p) {
     while (p->current == ' ' || p->current == '\t') {
         if (!parser_next(p)) {
-            logger_log(&p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Reached unexpected end of line", p->line);
+            logger_log(p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Reached unexpected end of line", p->line);
             return;
         }
     }
@@ -81,7 +87,7 @@ void parser_parseIdentifier(struct LineParser *p, char* identifier) {
     int i = 0;
     while (isdigit(p->current) || isalpha(p->current) || (p->current == '_')) {
         if (i >= 254) {
-            logger_log(&p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Identifiers is too long", p->line);
+            logger_log(p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Identifiers is too long", p->line);
             return;
         }
         if (isalpha(p->current)) {
@@ -109,7 +115,7 @@ int parser_parseNumber(struct LineParser *p, int *number) {
         parser_next(p);
     }
     if (!isdigit(p->current)) {
-        logger_log(&p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Expected a digit after '-'", p->line);
+        logger_log(p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Expected a digit after '-'", p->line);
         return 0;
     }
 
@@ -117,7 +123,7 @@ int parser_parseNumber(struct LineParser *p, int *number) {
     int i = 0;
     while (isdigit(p->current)) {
         if (i >= 100) {
-            logger_log(&p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Number is too long", p->line);
+            logger_log(p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Number is too long", p->line);
             return 0;
         }
         num_buf[i] = p->current;
@@ -146,13 +152,13 @@ int parser_parseString(struct LineParser *p, char *string) {
 
     while (p->current != '"') {
         if (i >= 254) {
-            logger_log(&p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: String is too long", p->line);
+            logger_log(p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: String is too long", p->line);
             return 0;
         }
         string[i] = p->current;
 
         if (!parser_next(p)) {
-            logger_log(&p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Missing closing '\"'", p->line);
+            logger_log(p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Missing closing '\"'", p->line);
             return 0;
         }
         i++;
@@ -178,7 +184,7 @@ int parser_parseHex(struct LineParser *p, int *hex) {
 
     while (isdigit(c) || c == 'a' || c == 'b' || c == 'c' || c == 'd' || c == 'e' || c == 'f') {
         if (i >= 100) {
-            logger_log(&p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Hex is too long", p->line);
+            logger_log(p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Hex is too long", p->line);
             return 0;
         }
         num_buf[i] = c;
@@ -217,7 +223,7 @@ int parser_parseArray(struct LineParser *p, struct DictionaryArray * array) {
         }
 
         if (p->current != '"') {
-            logger_log(&p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Expected '\"' but found %c", p->line, p->current);
+            logger_log(p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Expected '\"' but found %c", p->line, p->current);
             return 0;
         }
 
@@ -240,7 +246,7 @@ int parser_parseArray(struct LineParser *p, struct DictionaryArray * array) {
         else {
             if (p->current == '}') break;
             else {
-                logger_log(&p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Expected ';' or '}'", p->line);
+                logger_log(p->cfg->logger,LOG_LEVEL_ERROR, p->cfg->filename, "Error in line %d: Expected ';' or '}'", p->line);
                 return 0;
             }
         }
@@ -258,7 +264,7 @@ int parser_parseArray(struct LineParser *p, struct DictionaryArray * array) {
  * @param key
  * @return
  */
-int parser_parseValue(struct LineParser *p, const char key[256]) {
+void parser_parseValue(struct LineParser *p, const char key[256]) {
     //skip empty start
     parser_skipBlanc(p);
 
@@ -299,7 +305,6 @@ int parser_parseValue(struct LineParser *p, const char key[256]) {
         parser_parseIdentifier(p,identifier.c);
         dictionary_addString(&p->cfg->dictionary,key,identifier);
     }
-
 }
 
 /**
@@ -309,6 +314,7 @@ int parser_parseValue(struct LineParser *p, const char key[256]) {
  * @return {@code true} if the NIC is a wireless interface, {@code false} otherwise
  */
 int isWirelessNic(const char* ifname, char* protocol) {
+#ifndef PIKEOS_TOOLCHAIN
     int sock = -1;
     struct iwreq pwrq;
     memset(&pwrq, 0, sizeof(pwrq));
@@ -327,6 +333,8 @@ int isWirelessNic(const char* ifname, char* protocol) {
 
     close(sock);
     return 0;
+#endif // PIKEOS_TOOLCHAIN
+    return 0; // when compiling pike os no wireless NICs are supported
 }
 
 /**
@@ -339,6 +347,7 @@ int isWirelessNic(const char* ifname, char* protocol) {
  * @return the IP address of a wired NIC that matches the given index
  */
 char* getIpByNic(int index){
+#ifndef PIKEOS_TOOLCHAIN
     char * ip = rmalloc(16);
     struct ifaddrs *ifaddr, *ifa;
 
@@ -386,8 +395,12 @@ char* getIpByNic(int index){
     }
 
     freeifaddrs(ifaddr);
-
     return ip;
+#else
+    fprintf(stderr, "Function not supported when building with PIKEOS_TOOLCHAIN -> return localhost");
+    return "127.0.0.1";
+#endif // PIKEOS_TOOL_CHAIN
+
 }
 
 /**
@@ -517,7 +530,7 @@ void config_setstd(struct RastaConfig * cfg) {
         }
         else {
             //set std
-            logger_log(&cfg->logger,LOG_LEVEL_ERROR, cfg->filename, "RASTA_MD4_TYPE or RASTA_SR_CHECKSUM_LEN  may only be NONE, HALF or FULL");
+            logger_log(cfg->logger,LOG_LEVEL_ERROR, cfg->filename, "RASTA_MD4_TYPE or RASTA_SR_CHECKSUM_LEN  may only be NONE, HALF or FULL");
             cfg->values.sending.md4_type = RASTA_CHECKSUM_8B;
         }
     }
@@ -650,7 +663,7 @@ void config_setstd(struct RastaConfig * cfg) {
         for (int i = 0; i < entr.value.array.count; i++) {
             struct RastaIPData ip = extractIPData(entr.value.array.data[i].c, i);
             if (ip.port == 0) {
-                logger_log(&cfg->logger,LOG_LEVEL_ERROR, cfg->filename, "RASTA_REDUNDANCY_CONNECTIONS may only contain strings in format ip:port or *:port");
+                logger_log(cfg->logger,LOG_LEVEL_ERROR, cfg->filename, "RASTA_REDUNDANCY_CONNECTIONS may only contain strings in format ip:port or *:port");
                 rfree(entr.value.array.data);
                 entr.value.array.count = 0;
                 break;
@@ -684,7 +697,7 @@ void config_setstd(struct RastaConfig * cfg) {
         }
         else {
             //set std
-            logger_log(&cfg->logger,LOG_LEVEL_ERROR, cfg->filename, "RASTA_CRC_TYPE may only be TYPE_A, TYPE_B, TYPE_C, TYPE_D or TYPE_E");
+            logger_log(cfg->logger,LOG_LEVEL_ERROR, cfg->filename, "RASTA_CRC_TYPE may only be TYPE_A, TYPE_B, TYPE_C, TYPE_D or TYPE_E");
             cfg->values.redundancy.crc_type = crc_init_opt_a();
         }
     }
@@ -766,7 +779,7 @@ struct RastaConfig config_load(const char filename[256]) {
 
     f = fopen(config.filename,"r");
     if (!f){
-        logger_log(&config.logger, LOG_LEVEL_ERROR, config.filename, "File not found");
+        logger_log(config.logger, LOG_LEVEL_ERROR, config.filename, "File not found");
         return config;
     }
 
@@ -808,7 +821,7 @@ struct RastaConfig config_load(const char filename[256]) {
         parser_skipBlanc(&p);
 
         if (p.current != '=') {
-            logger_log(&p.cfg->logger,LOG_LEVEL_ERROR, p.cfg->filename, "Error in line %d: Expected '=' but found '%c'", p.line,p.current);
+            logger_log(p.cfg->logger,LOG_LEVEL_ERROR, p.cfg->filename, "Error in line %d: Expected '=' but found '%c'", p.line,p.current);
             n++;
             continue;
         }

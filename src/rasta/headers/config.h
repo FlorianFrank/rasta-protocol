@@ -100,7 +100,7 @@ struct RastaConfig {
     /**
      * console logger for debug information
      */
-    struct logger_t logger;
+    struct logger_t* logger;
 
     /**
      * the filename (do not set manually)
