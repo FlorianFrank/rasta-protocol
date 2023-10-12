@@ -28,7 +28,7 @@ extern "C" {  // only need to export C interface if
 /**
  * maximum size of log messages in bytes
  */
-#define LOGGER_MAX_MSG_SIZE 4096
+#define LOGGER_MAX_MSG_SIZE 1024
 
 /**
  * the log level
@@ -137,7 +137,7 @@ struct logger_t{
  * @param type the type of logging
  * @return a logger struct
  */
-struct logger_t logger_init(log_level max_log_level, logger_type type);
+struct logger_t* logger_init(log_level max_log_level, logger_type type);
 
 /**
  * sets the path to the log file

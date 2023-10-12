@@ -7,7 +7,12 @@
 #include <string.h>
 #include "rmemory.h"
 #include "logging.h"
+#ifndef PIKEOS_TOOLCHAIN
 #include <syscall.h>
+#else
+#include <vm.h>
+#include <posix/include/time.h> // strftime, time
+#endif // PIKEOS_TOOLCHAIN
 #include <logging.h>
 
 /**
@@ -15,7 +20,12 @@
  * @param message the message that will be logged
  */
 void log_to_console(const char * message){
-    printf(message);
+#ifdef PIKEOS_TOOLCHAIN
+    vm_cprintf("%s", message);
+#else
+    printf("%s", message);
+#endif // PIKEOS_TOOLCHAIN
+
     // flush buffer
     fflush(stdout);
 }
@@ -40,8 +50,11 @@ void log_to_file(const char * message, const char * log_file){
     }
 
     // write log message to file
-    fprintf(pFile, message);
-
+#ifdef PIKEOS_TOOLCHAIN
+    vm_cprintf("Safety: %s\n", message);
+#else
+    fprintf(pFile, "%s", message);
+#endif // PIKEOS_TOOLCHAIN
     fclose(pFile);
 }
 
@@ -99,10 +112,19 @@ char * get_log_message_string(log_level max_log_level, log_level level, char * l
     // add milliseconds to timestamp
     sprintf(timestamp2, "%s (Epoch time: %llu)", timestamp, millisecondsSinceEpoch);
 
-    char *  msg_string = rmalloc(LOGGER_MAX_MSG_SIZE);
-    sprintf(msg_string, LOG_FORMAT, timestamp2, level_str, location, msg_str);
-
-    return msg_string;
+    char  stringBuffer[LOGGER_MAX_MSG_SIZE];
+    int strLen = sprintf(stringBuffer, LOG_FORMAT, timestamp2, level_str, location, msg_str);
+    if(strLen  <= 0){
+        perror("sprintf returned <= 0\n");
+        return NULL;
+    }
+    char *retBuff = rmalloc(strLen + 1);
+    if(!retBuff){
+        perror("Could not allocate memory for log message\n");
+        return retBuff;
+    }
+    strcpy(retBuff, stringBuffer);
+    return retBuff;
 }
 
 /**
@@ -182,25 +204,25 @@ void start_writing(struct logger_t * logger){
     logger->write_thread = write_thread;
 }
 
-struct logger_t logger_init(log_level max_log_level, logger_type type){
-    struct logger_t logger;
+struct logger_t* logger_init(log_level max_log_level, logger_type type){
+    struct logger_t* logger = malloc(sizeof(struct logger_t));
 
-    logger.type = type;
-    logger.max_log_level = max_log_level;
-    logger.log_file = NULL;
+    logger->type = type;
+    logger->max_log_level = max_log_level;
+    logger->log_file = NULL;
 
     // init the mutex
-    pthread_mutex_init(&logger.mutex, NULL);
+    pthread_mutex_init(&logger->mutex, NULL);
 
     // init the buffer FIFO
-    logger.buffer = fifo_init(LOGGER_BUFFER_SIZE);
+    logger->buffer = fifo_init(LOGGER_BUFFER_SIZE);
 
     if (type == LOGGER_TYPE_CONSOLE){
         // if type is console, start write thread immediately
         // if type is file or both, it will be started when file is set
 
         // start write thread
-        start_writing(&logger);
+        start_writing(logger);
     }
 
     return logger;
@@ -282,4 +304,5 @@ void logger_destroy(struct logger_t * logger){
 
     fifo_destroy(logger->buffer);
     rfree(logger->wrapper_ptr);
+    free(logger);
 }
