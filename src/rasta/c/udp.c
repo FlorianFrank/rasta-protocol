@@ -2,10 +2,23 @@
 #include "stdio.h"
 #include <string.h> //memset
 #include <stdlib.h>
-#include <arpa/inet.h>
+
 #include <errno.h>
 #include <unistd.h>
 #include "rmemory.h"
+
+#ifdef PIKEOS_TOOLCHAIN
+#define printError vm_cprintf
+#include <types.h>
+#include "sys/socket.h"
+#include "lwip/udp.h"
+#include <posix/include/unistd.h>
+#include <vm.h>
+#include <lwip/inet.h>
+#else
+#define printError printf
+#include <arpa/inet.h>
+#endif // PIKEOS_TOOLCHAIN
 
 /**
  * clears the erros of the socket and prepares for closing
@@ -36,7 +49,7 @@ void udp_bind(int file_descriptor, uint16_t port) {
     if( bind(file_descriptor , (struct sockaddr*)&local, sizeof(local) ) == -1)
     {
         // bind failed
-        perror("could not bind the socket to port " + port);
+        printError("udp.c:%d:: Could not bind the socket to port %d", __LINE__, port);
         exit(1);
     }
 }
@@ -55,7 +68,7 @@ void udp_bind_device(int file_descriptor, uint16_t port, char * ip) {
     if( bind(file_descriptor , (struct sockaddr*)&local, sizeof(struct sockaddr_in) ) == -1)
     {
         // bind failed
-        perror("could not bind the socket to port" + port);
+        printError("udp.c:%d:: Could not bind the socket to port %d", __LINE__, port);
         exit(1);
     }
 }
@@ -66,12 +79,12 @@ void udp_close(int file_descriptor) {
         getSO_ERROR(file_descriptor); // first clear any errors, which can cause close to fail
         if (shutdown(file_descriptor, SHUT_RDWR) < 0) // secondly, terminate the 'reliable' delivery
             if (errno != ENOTCONN && errno != EINVAL){ // SGI causes EINVAL
-                perror("shutdown");
+                printError("udp.c:%d:: shutdown", __LINE__);
                 exit(1);
             }
         if (close(file_descriptor) < 0) // finally call close()
         {
-            perror("close");
+            printError("udp.c:%d:: close", __LINE__);
             exit(1);
         }
     }
@@ -79,16 +92,14 @@ void udp_close(int file_descriptor) {
 
 size_t udp_receive(int file_descriptor, unsigned char *received_message, size_t max_buffer_len, struct sockaddr_in *sender) {
     ssize_t recv_len;
-    struct sockaddr_in empty_sockaddr_in;
-    socklen_t sender_len = sizeof(empty_sockaddr_in);
+    socklen_t sender_len = sizeof(struct sockaddr_in);
 
     // wait for incoming data
     if ((recv_len = recvfrom(file_descriptor, received_message, max_buffer_len, 0, (struct sockaddr *) sender, &sender_len)) == -1)
     {
-        perror("an error occured while trying to receive data");
+        printError("udp.c:%d:: An error occurred while trying to receive data", __LINE__);
         exit(1);
     }
-
     return (size_t) recv_len;
 }
 
@@ -102,7 +113,7 @@ void udp_send(int file_descriptor, unsigned char *message, size_t message_len, c
     // convert host string to usable format
     if (inet_aton(host , &receiver.sin_addr) == 0)
     {
-        fprintf(stderr, "inet_aton() failed\n");
+        printError("udp.c:%d:: inet_aton() failed\n", __LINE__);
         exit(1);
     }
 
@@ -113,7 +124,7 @@ void udp_send(int file_descriptor, unsigned char *message, size_t message_len, c
 void udp_send_sockaddr(int file_descriptor, unsigned char *message, size_t message_len, struct sockaddr_in receiver) {
     if (sendto(file_descriptor, message, message_len, 0, (struct sockaddr*) &receiver, sizeof(receiver)) == -1)
     {
-        perror("failed to send data");
+        printError("udp.c:%d:: Failed to send data", __LINE__);
         exit(1);
     }
 }
@@ -126,7 +137,7 @@ int udp_init() {
     if ((file_desc=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
     {
         // creation failed, exit
-        perror("The udp socket could not be initialized");
+        printError("udp.c:%d:: The udp socket could not be initialized", __LINE__);
         exit(1);
     }
 
