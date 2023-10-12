@@ -109,7 +109,7 @@ void sr_init_handle(struct rasta_handle* handle, const char* config_file_path);
  * @param accepted_version an initialized DictionaryArray with all version accepted by this handle
  * @param logger the initialized logger
  */
-void sr_init_handle_manually(struct rasta_handle *handle, struct RastaConfigInfo configuration, struct DictionaryArray accepted_version, struct logger_t logger);
+void sr_init_handle_manually(struct rasta_handle *handle, struct RastaConfigInfo configuration, struct DictionaryArray accepted_version, struct logger_t *logger);
 
 /**
  * connects to another rasta instance

@@ -10,7 +10,16 @@
 #include "rasta_new.h"
 #include <time.h>
 #include <errno.h>
+
+#ifndef PIKEOS_TOOLCHAIN
 #include <syscall.h>
+#else
+#include <vm.h>
+#include "lwip/sockets.h"
+#include <posix/include/time.h>
+#include <posix/include/unistd.h>
+#include <unistd.h>
+#endif // PIKEOS_TOOLCHAIN
 #include <rasta_new.h>
 
 /**
@@ -22,7 +31,11 @@ uint32_t cur_timestamp(){
     time_t s;
     struct timespec spec;
 
-    clock_gettime(CLOCK_MONOTONIC, &spec);
+#ifndef PIKEOS_TOOLCHAIN
+    clock_gettime(CLOCK_MONOTONIC, &spec); // CLOCK_REALTIME not supported on PIKEOS
+#else
+    clock_gettime(CLOCK_REALTIME, &spec);
+#endif
 
     s = spec.tv_sec;
 
@@ -301,7 +314,8 @@ void sr_remove_confirmed_messages(struct rasta_receive_handle *h,struct rasta_co
 
     struct RastaByteArray * elem;
     while ((elem = fifo_pop(con->fifo_retr)) != NULL){
-        struct RastaPacket packet = bytesToRastaPacket(*elem, h->hashing_context);
+        struct RastaPacket packet;
+        bytesToRastaPacket(&packet, elem, h->hashing_context);
         logger_log(h->logger, LOG_LEVEL_DEBUG, "RaSTA remove confirmed", "removing packet with sn = %lu",
                    packet.sequence_number);
 
@@ -557,7 +571,8 @@ void sr_retransmit_data(struct rasta_receive_handle *h, struct rasta_connection 
         logger_log(h->logger, LOG_LEVEL_DEBUG, "RaSTA retransmission", "retransmit packet %d", i);
 
         // retrieve retransmission data to
-        struct RastaPacket old_p = bytesToRastaPacket(packets[i], h->hashing_context);
+        struct RastaPacket old_p;
+        bytesToRastaPacket(&old_p, &packets[i], h->hashing_context);
         logger_log(h->logger, LOG_LEVEL_DEBUG, "RaSTA retransmission", "convert packet %d to packet structure", i);
 
         struct RastaMessageData app_messages = extractMessageData(old_p);
@@ -569,7 +584,8 @@ void sr_retransmit_data(struct rasta_receive_handle *h, struct rasta_connection 
                                                                  app_messages, h->hashing_context);
         logger_log(h->logger, LOG_LEVEL_DEBUG, "RaSTA retransmission", "created retransmission packet %d ", i);
 
-        struct RastaByteArray new_p = rastaModuleToBytes(data, h->hashing_context);
+        struct RastaByteArray new_p;
+        rastaModuleToBytes(&new_p, &data, h->hashing_context);
 
         // add packet to retrFifo again
         struct RastaByteArray * to_fifo = rmalloc(sizeof(struct RastaByteArray));
@@ -1423,7 +1439,8 @@ void * send_thread(void * handle){
                                                                 app_messages, h->hashing_context);
 
 
-                    struct RastaByteArray packet = rastaModuleToBytes(data, h->hashing_context);
+                    struct RastaByteArray packet;
+                    rastaModuleToBytes(&packet, &data, h->hashing_context);
 
                     struct RastaByteArray * to_fifo = rmalloc(sizeof(struct RastaByteArray));
                     allocateRastaByteArray(to_fifo, packet.length);
@@ -1520,19 +1537,29 @@ void sr_start_sending(struct rasta_sending_handle *handle){
 
 void sr_start(struct rasta_handle *handle) {
     //open mux
-    logger_log(&handle->logger, LOG_LEVEL_DEBUG, "RaSTA HANDLE_INIT", "Open Mux");
+    logger_log(handle->logger, LOG_LEVEL_DEBUG, "RaSTA HANDLE_INIT", "Open Mux");
     redundancy_mux_open(&handle->mux);
 
     //start threads
-    logger_log(&handle->logger, LOG_LEVEL_DEBUG, "RaSTA HANDLE_INIT", "Start receiving");
+    logger_log(handle->logger, LOG_LEVEL_DEBUG, "RaSTA HANDLE_INIT", "Start receiving");
     sr_start_receiving(handle->receive_handle);
-    logger_log(&handle->logger, LOG_LEVEL_DEBUG, "RaSTA HANDLE_INIT", "Start heartbeats");
+    logger_log(handle->logger, LOG_LEVEL_DEBUG, "RaSTA HANDLE_INIT", "Start heartbeats");
     sr_start_heartbeats(handle->heartbeat_handle);
-    logger_log(&handle->logger, LOG_LEVEL_DEBUG, "RaSTA HANDLE_INIT", "Start sending");
+    logger_log(handle->logger, LOG_LEVEL_DEBUG, "RaSTA HANDLE_INIT", "Start sending");
     sr_start_sending(handle->send_handle);
 }
 
-void sr_init_handle_manually(struct rasta_handle *handle, struct RastaConfigInfo configuration, struct DictionaryArray accepted_version, struct logger_t logger) {
+void sr_init_handle_manually(struct rasta_handle *handle, struct RastaConfigInfo configuration, struct DictionaryArray accepted_version, struct logger_t *logger) {
+
+#if PIKEOS_TOOLCHAIN
+    logger_log(handle->logger, LOG_LEVEL_DEBUG, "RaSTA init manually", "Initialize lwip-stack");
+    if(_lwip_init() != 0)
+    {
+        logger_log(handle->logger, LOG_LEVEL_ERROR, "RaSTA init manually", "Error while initializing lwip-stack");
+        vm_cputs("Error while calling _lwip_init()\n");
+        exit(1);
+    }
+#endif // PIKEOS_TOOLCHAIN
     rasta_handle_manually_init(handle,configuration,accepted_version, logger);
 
     // init the redundancy layer
@@ -1593,13 +1620,13 @@ void sr_connect(struct rasta_handle *handle, unsigned long id, struct RastaIPDat
     redundancy_mux_add_channel(&handle->mux,id,channels);
 
     struct rasta_connection new_con;
-    sr_init_connection(&new_con,id,handle->config.values.general,handle->config.values.sending,&handle->logger, RASTA_ROLE_CLIENT);
+    sr_init_connection(&new_con,id,handle->config.values.general,handle->config.values.sending,handle->logger, RASTA_ROLE_CLIENT);
     redundancy_mux_set_config_id(&handle->mux, id);
 
     // initialize seq nums and timestamps
     new_con.sn_t = get_initial_seq_num(&handle->config);
     //new_con.sn_t = 66;
-    logger_log(&handle->logger, LOG_LEVEL_DEBUG, "RaSTA CONNECT", "Using %lu as initial sequence number", new_con.sn_t);
+    logger_log(handle->logger, LOG_LEVEL_DEBUG, "RaSTA CONNECT", "Using %lu as initial sequence number", new_con.sn_t);
 
     new_con.cs_t = 0;
     new_con.cts_r = cur_timestamp();
@@ -1607,7 +1634,7 @@ void sr_connect(struct rasta_handle *handle, unsigned long id, struct RastaIPDat
 
     unsigned char * version = (unsigned char*)RASTA_VERSION;
 
-    logger_log(&handle->logger, LOG_LEVEL_DEBUG, "RaSTA CONNECT", "Local version is %s", version);
+    logger_log(handle->logger, LOG_LEVEL_DEBUG, "RaSTA CONNECT", "Local version is %s", version);
 
 
     // send ConReq
@@ -1646,7 +1673,7 @@ void sr_send(struct rasta_handle *h, unsigned long remote_id, struct RastaMessag
     if(connection->current_state == RASTA_CONNECTION_UP){
         if (app_messages.count > h->config.values.sending.max_packet){
             // to many application messages
-            logger_log(&h->logger, LOG_LEVEL_ERROR, "RaSTA send", "too many application messages to send in one packet. Maximum is %d",
+            logger_log(h->logger, LOG_LEVEL_ERROR, "RaSTA send", "too many application messages to send in one packet. Maximum is %d",
                        h->config.values.sending.max_packet);
             // do nothing and leave method with error code 2
             pthread_mutex_unlock(&connection->lock);
@@ -1664,7 +1691,7 @@ void sr_send(struct rasta_handle *h, unsigned long remote_id, struct RastaMessag
             fifo_push(connection->fifo_send, to_fifo);
         }
 
-        logger_log(&h->logger, LOG_LEVEL_INFO, "RaSTA send", "data in send queue");
+        logger_log(h->logger, LOG_LEVEL_INFO, "RaSTA send", "data in send queue");
 
     } else if (connection->current_state == RASTA_CONNECTION_CLOSED || connection->current_state == RASTA_CONNECTION_DOWN){
         // nothing to do besides changing state to closed
@@ -1673,7 +1700,7 @@ void sr_send(struct rasta_handle *h, unsigned long remote_id, struct RastaMessag
         // fire connection state changed event
         fire_on_connection_state_change(sr_create_notification_result(h,connection));
     } else {
-        logger_log(&h->logger, LOG_LEVEL_ERROR, "RaSTA send", "service not allowed");
+        logger_log(h->logger, LOG_LEVEL_ERROR, "RaSTA send", "service not allowed");
 
         // disconnect and close
         send_DisconnectionRequest(&h->mux,connection, RASTA_DISC_REASON_SERVICENOTALLOWED, 0);
@@ -1698,8 +1725,8 @@ rastaApplicationMessage sr_get_received_data(struct rasta_handle *h, struct rast
     message.id = element->id;
     message.appMessage = element->appMessage;
 
-    logger_log(&h->logger, LOG_LEVEL_INFO, "RaSTA retrieve", "application message with %lX", message.appMessage.bytes);
-    logger_log(&h->logger, LOG_LEVEL_DEBUG, "RaSTA retrieve", "application message with l %d", message.appMessage.length);
+    logger_log(h->logger, LOG_LEVEL_INFO, "RaSTA retrieve", "application message with %lX", message.appMessage.bytes);
+    logger_log(h->logger, LOG_LEVEL_DEBUG, "RaSTA retrieve", "application message with l %d", message.appMessage.length);
     //logger_log(&h->logger, LOG_LEVEL_DEBUG, "RETRIEVE DATA", "Convert bytes to packet");
 
     rfree(element);
@@ -1720,7 +1747,7 @@ void sr_disconnect(struct rasta_handle *h, unsigned long remote_id) {
 }
 
 void sr_cleanup(struct rasta_handle *h) {
-    logger_log(&h->logger, LOG_LEVEL_DEBUG, "RaSTA Cleanup", "Cleanup called");
+    logger_log(h->logger, LOG_LEVEL_DEBUG, "RaSTA Cleanup", "Cleanup called");
 
     h->hb_running = 0;
     h->recv_running = 0;
@@ -1772,11 +1799,11 @@ void sr_cleanup(struct rasta_handle *h) {
 
     rastalist_free(&h->connections);
 
-    logger_log(&h->logger, LOG_LEVEL_DEBUG, "RaSTA Cleanup", "Cleanup done");
+    logger_log(h->logger, LOG_LEVEL_DEBUG, "RaSTA Cleanup", "Cleanup done");
 
 
     sleep(1);
-    logger_destroy(&h->logger);
+    logger_destroy(h->logger);
 
 
 }
