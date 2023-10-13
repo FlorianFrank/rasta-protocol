@@ -1,5 +1,11 @@
 #include <stdlib.h>
+#ifdef PIKEOS_TOOLCHAIN
+#include <posix/include/time.h>
+#include <timespec.h>
+#else
 #include <time.h>
+#endif // PIKEOS_TOOLCHAIN
+
 #include "rastautil.h"
 
 
@@ -7,8 +13,11 @@ uint32_t current_ts(){
     long ms;
     time_t s;
     struct timespec spec;
-
+#ifndef PIKEOS_TOOLCHAIN
     clock_gettime(CLOCK_MONOTONIC, &spec);
+#else
+    clock_gettime(CLOCK_REALTIME, &spec);
+#endif // PIKEOS_TOOLCHAIN
 
     s = spec.tv_sec;
 
