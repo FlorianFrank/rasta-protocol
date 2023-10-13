@@ -100,7 +100,8 @@ install(TARGETS rasta
         PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 # Enable optimization for RaSTA
-target_compile_options(rasta PRIVATE -O3)
+target_compile_options(rasta PRIVATE -O3 -Wall -Wextra -Wpedantic -Werror)
+
 
 if(BUILD_LOCAL_EXAMPLES)
 	# scip_example on localhost
