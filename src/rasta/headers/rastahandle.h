@@ -21,6 +21,7 @@ extern "C" {  // only need to export C interface if
 #include "config.h"
 #include "rasta_red_multiplexer.h"
 
+typedef struct rasta_notification_result rasta_notification_result;
 
 /**
  * pointer to a function that will be called when application messages are ready for processing
@@ -255,9 +256,9 @@ struct rasta_handle {
     /**
     * the logger which is used to log protocol activities
     */
-    struct logger_t logger;
+    struct logger_t* logger;
 
-    struct logger_t redlogger;
+    struct logger_t* redlogger;
 
     /**
      * RaSTA parameters that have been loaded from file
@@ -347,7 +348,7 @@ void rasta_handle_init(struct rasta_handle *h, const char* config_file_path);
  * @param accepted_versions
  * @param logger
  */
-void rasta_handle_manually_init(struct rasta_handle *h, struct RastaConfigInfo configuration, struct DictionaryArray accepted_versions , struct logger_t logger);
+void rasta_handle_manually_init(struct rasta_handle *h, struct RastaConfigInfo configuration, struct DictionaryArray accepted_versions , struct logger_t *logger);
 
 #ifdef __cplusplus
 }
