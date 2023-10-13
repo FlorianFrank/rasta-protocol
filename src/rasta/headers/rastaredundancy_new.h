@@ -147,7 +147,7 @@ typedef struct {
     /**
      * logger used for logging
      */
-    struct logger_t logger;
+    struct logger_t* logger;
 
     /**
      * 1 if the redundancy channel is open, 0 if it is closed
@@ -178,7 +178,8 @@ typedef struct {
  * @param id the RaSTA ID that is associated with this redundancy channel
  * @return an initialized redundancy channel
  */
-rasta_redundancy_channel rasta_red_init(struct logger_t logger, struct RastaConfigInfo config, unsigned int transport_channel_count,
+
+void rasta_red_init(rasta_redundancy_channel *new_channel, struct logger_t *logger, struct RastaConfigInfo *config, unsigned int transport_channel_count,
                                         unsigned long id);
 
 /**
@@ -187,7 +188,7 @@ rasta_redundancy_channel rasta_red_init(struct logger_t logger, struct RastaConf
  * @param packet the packet that has been received over UDP
  * @param channel_id the index of the transport channel, the @p packet has been received
  */
-void rasta_red_f_receive(rasta_redundancy_channel * channel, struct RastaRedundancyPacket packet, int channel_id);
+void rasta_red_f_receive(rasta_redundancy_channel * channel, struct RastaRedundancyPacket *packet, int channel_id);
 
 /**
  * the f_deferTmo function of the redundancy layer

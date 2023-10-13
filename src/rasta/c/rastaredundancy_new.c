@@ -7,56 +7,57 @@
 #include "rastaredundancy_new.h"
 #include "rastautil.h"
 
-rasta_redundancy_channel rasta_red_init(struct logger_t logger, struct RastaConfigInfo config, unsigned int transport_channel_count,
+void rasta_red_init(rasta_redundancy_channel *channel, struct logger_t *logger, struct RastaConfigInfo *config, unsigned int transport_channel_count,
                                         unsigned long id){
-    rasta_redundancy_channel channel;
 
     // initialize the channel mutex
-    pthread_mutex_init(&channel.channel_lock, NULL);
+    pthread_mutex_init(&channel->channel_lock, NULL);
 
-    channel.associated_id = id;
+    channel->associated_id = id;
 
-    channel.logger = logger;
-    channel.configuration_parameters = config.redundancy;
+    channel->logger = logger;
+    channel->configuration_parameters = config->redundancy;
 
-    channel.is_open = 0;
+    channel->is_open = 0;
 
     // init sequence numbers
-    channel.seq_rx = 0;
-    channel.seq_tx = 0;
+    channel->seq_rx = 0;
+    channel->seq_tx = 0;
 
     // init defer queue
-    channel.defer_q = deferqueue_init(config.redundancy.n_deferqueue_size);
-    channel.fifo_recv = fifo_init(config.redundancy.n_deferqueue_size);
+
+
+    defer_queue_init(&channel->defer_q, config->redundancy.n_deferqueue_size);
+    channel->fifo_recv = fifo_init(config->redundancy.n_deferqueue_size);
 
     // init diagnostics buffer
-    channel.diagnostics_packet_buffer = deferqueue_init(10 * config.redundancy.n_deferqueue_size);
+    defer_queue_init(&channel->diagnostics_packet_buffer, 10 * config->redundancy.n_deferqueue_size);
 
     // init hashing context
-    channel.hashing_context.hash_length = config.sending.md4_type;
-    channel.hashing_context.algorithm = config.sending.sr_hash_algorithm;
+    channel->hashing_context.hash_length = config->sending.md4_type;
+    channel->hashing_context.algorithm = config->sending.sr_hash_algorithm;
 
-    if (channel.hashing_context.algorithm == RASTA_ALGO_MD4){
+    if (channel->hashing_context.algorithm == RASTA_ALGO_MD4){
         // use MD4 IV as key
-        rasta_md4_set_key(&channel.hashing_context, config.sending.md4_a, config.sending.md4_b,
-                          config.sending.md4_c, config.sending.md4_d);
+        rasta_md4_set_key(&channel->hashing_context, config->sending.md4_a, config->sending.md4_b,
+                          config->sending.md4_c, config->sending.md4_d);
     } else {
         // use the sr_hash_key
-        allocateRastaByteArray(&channel.hashing_context.key, sizeof(unsigned int));
+        allocateRastaByteArray(&channel->hashing_context.key, sizeof(unsigned int));
 
         // convert unsigned in to byte array
-        channel.hashing_context.key.bytes[0] = (config.sending.sr_hash_key >> 24) & 0xFF;
-        channel.hashing_context.key.bytes[1] = (config.sending.sr_hash_key >> 16) & 0xFF;
-        channel.hashing_context.key.bytes[2] = (config.sending.sr_hash_key >> 8) & 0xFF;
-        channel.hashing_context.key.bytes[3] = (config.sending.sr_hash_key) & 0xFF;
+        channel->hashing_context.key.bytes[0] = (config->sending.sr_hash_key >> 24) & 0xFF;
+        channel->hashing_context.key.bytes[1] = (config->sending.sr_hash_key >> 16) & 0xFF;
+        channel->hashing_context.key.bytes[2] = (config->sending.sr_hash_key >> 8) & 0xFF;
+        channel->hashing_context.key.bytes[3] = (config->sending.sr_hash_key) & 0xFF;
     }
     // init transport channel buffer;
-    logger_log(&channel.logger, LOG_LEVEL_DEBUG, "RaSTA Red init", "space for %d connected channels", transport_channel_count);
-    channel.connected_channels = rmalloc(transport_channel_count * sizeof(rasta_transport_channel));
-    channel.connected_channel_count = 0;
-    channel.transport_channel_count = transport_channel_count;
-
-    return channel;
+#ifndef PIKEOS_TOOLCHAIN
+    logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red init", "space for %d connected channels", transport_channel_count);
+#endif // PIKEOS_TOOLCHAIN
+    channel->connected_channels = rmalloc(transport_channel_count * sizeof(rasta_transport_channel));
+    channel->connected_channel_count = 0;
+    channel->transport_channel_count = transport_channel_count;
 }
 
 
@@ -67,19 +68,24 @@ rasta_redundancy_channel rasta_red_init(struct logger_t logger, struct RastaConf
  */
 void deliverDeferQueue(rasta_redundancy_channel * channel){
     pthread_mutex_lock(&channel->channel_lock);
-    logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red deliver deferq", "f_deliverDeferQueue called");
+#ifndef PIKEOS_TOOLCHAIN
+    logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red deliver deferq", "f_deliverDeferQueue called");
+#endif // PIKEOS_TOOLCHAIN
 
     // check if message with seq_pdu == seq_rx in defer queue
     while (deferqueue_contains(&channel->defer_q, channel->seq_rx)){
-        logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red deliver deferq", "deferq contains seq_pdu=%d",
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red deliver deferq", "deferq contains seq_pdu=%d",
                    channel->seq_rx);
+#endif // PIKEOS_TOOLCHAIN
 
         // forward to next layer by pushing into receive FIFO
-
         struct RastaByteArray innerPackerBytes;
         // convert inner data (RaSTA SR layer PDU) to byte array
-        innerPackerBytes = rastaModuleToBytes(deferqueue_get(&channel->defer_q, channel->seq_rx).data,
-                &channel->hashing_context);
+        struct RastaRedundancyPacket redundancyPacket;
+        deferqueue_get(&redundancyPacket, &channel->defer_q, channel->seq_rx);
+        rastaModuleToBytes(&innerPackerBytes, &redundancyPacket.data,
+                                              &channel->hashing_context);
 
         // add to queue
         struct RastaByteArray * to_fifo = rmalloc(sizeof(struct RastaByteArray));
@@ -89,26 +95,36 @@ void deliverDeferQueue(rasta_redundancy_channel * channel){
 
         freeRastaByteArray(&innerPackerBytes);
 
-        logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red deliver deferq", "added message to buffer");
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red deliver deferq", "added message to buffer");
+#endif // PIKEOS_TOOLCHAIN
 
         // remove message from queue (effectively a pop operation with the get call)
         deferqueue_remove(&channel->defer_q, channel->seq_rx);
-        logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red deliver deferq", "remove message from deferq");
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red deliver deferq", "remove message from deferq");
+#endif // PIKEOS_TOOLCHAIN
 
         // increase seq_rx
         channel->seq_rx = channel->seq_rx +1;
         pthread_mutex_unlock(&channel->channel_lock);
     }
-    logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red deliver deferq", "deferq doesn't contain seq_pdu=%d",
+#ifndef PIKEOS_TOOLCHAIN
+    logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red deliver deferq", "deferq doesn't contain seq_pdu=%d",
                channel->seq_rx);
+#endif // PIKEOS_TOOLCHAIN
 }
 
-void rasta_red_f_receive(rasta_redundancy_channel * channel, struct RastaRedundancyPacket packet, int channel_id){
-    logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "Channel %d: ptr=%p", channel_id, channel);
+void rasta_red_f_receive(rasta_redundancy_channel * channel, struct RastaRedundancyPacket* packet, int channel_id){
+#ifndef PIKEOS_TOOLCHAIN
+    logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "Channel %d: ptr=%p", channel_id, channel);
+#endif // PIKEOS_TOOLCHAIN
 
     pthread_mutex_lock(&channel->channel_lock);
-    if(!packet.checksum_correct){
-        logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "Channel 0: Packet checksum incorrect", channel_id);
+    if(!packet->checksum_correct){
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "Channel 0: Packet checksum incorrect", channel_id);
+#endif // PIKEOS_TOOLCHAIN
 
         pthread_mutex_unlock(&channel->channel_lock);
         // checksum incorrect, exit function
@@ -121,20 +137,23 @@ void rasta_red_f_receive(rasta_redundancy_channel * channel, struct RastaRedunda
     channel->connected_channels[channel_id].diagnostics_data.received_packets += 1;
 
     // only accept pdu with seq. nr = 0 as first message
-    if (channel->seq_rx == 0 && channel->seq_tx == 0 && packet.sequence_number != 0){
-        logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: first seq_pdu != 0", channel_id);
-
+    if (channel->seq_rx == 0 && channel->seq_tx == 0 && packet->sequence_number != 0){
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: first seq_pdu != 0", channel_id);
+#endif // PIKEOS_TOOLCHAIN
         pthread_mutex_unlock(&channel->channel_lock);
         return;
     }
 
     // check seq_pdu
-    if (packet.sequence_number < channel->seq_rx){
-        logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: seq_pdu < seq_rx", channel_id);
+    if (packet->sequence_number < channel->seq_rx){
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: seq_pdu < seq_rx", channel_id);
+#endif // PIKEOS_TOOLCHAIN
         // message has been received by other transport channel
         // -> calculate delay by looking for the received ts in diagnostics queue
 
-        unsigned long ts = deferqueue_get_ts(&channel->diagnostics_packet_buffer, packet.sequence_number);
+        unsigned long ts = deferqueue_get_ts(&channel->diagnostics_packet_buffer, packet->sequence_number);
         if(ts != 0){
             // seq_pdu was in queue, received time is ts
             unsigned long delay = current_ts() - ts;
@@ -153,11 +172,13 @@ void rasta_red_f_receive(rasta_redundancy_channel * channel, struct RastaRedunda
         pthread_mutex_unlock(&channel->channel_lock);
         // discard message
         return;
-    } else if (packet.sequence_number == channel->seq_rx){
+    } else if (packet->sequence_number == channel->seq_rx){
         channel->seq_rx++;
-        logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: correct seq. nr. delivering to next layer",
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: correct seq. nr. delivering to next layer",
                    channel_id);
-        logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: seq_pdu=%lu, seq_rx=%lu", channel_id, packet.sequence_number, channel->seq_rx -1);
+        logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: seq_pdu=%lu, seq_rx=%lu", channel_id, packet->sequence_number, channel->seq_rx -1);
+#endif // PIKEOS_TOOLCHAIN
         // received packet as first transport channel -> add with ts to diagnostics buffer
         deferqueue_add(&channel->diagnostics_packet_buffer, packet, current_ts());
 
@@ -165,7 +186,7 @@ void rasta_red_f_receive(rasta_redundancy_channel * channel, struct RastaRedunda
 
         struct RastaByteArray innerPackerBytes;
         // convert inner data (RaSTA SR layer PDU) to byte array
-        innerPackerBytes = rastaModuleToBytesNoChecksum(packet.data, &channel->hashing_context);
+        rastaModuleToBytesNoChecksum(&innerPackerBytes, &packet->data, &channel->hashing_context);
 
         // add to queue
         struct RastaByteArray * to_fifo = rmalloc(sizeof(struct RastaByteArray));
@@ -175,8 +196,10 @@ void rasta_red_f_receive(rasta_redundancy_channel * channel, struct RastaRedunda
 
         freeRastaByteArray(&innerPackerBytes);
 
-        logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: added message to buffer",
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: added message to buffer",
                    channel_id);
+#endif // PIKEOS_TOOLCHAIN
 
         // here the on receive notification would be fired
 
@@ -185,15 +208,19 @@ void rasta_red_f_receive(rasta_redundancy_channel * channel, struct RastaRedunda
         // deliver message to upper layer
         pthread_mutex_unlock(&channel->channel_lock);
         deliverDeferQueue(channel);
-    } else if (channel->seq_rx < packet.sequence_number
-               && packet.sequence_number <= (channel->seq_rx + channel->configuration_parameters.n_deferqueue_size * 10)){
-        logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: seq_rx < seq_pdu && seq_pdu <= (seq_rx + 10 * MAX_DEFERQUEUE_SIZE)"
+    } else if (channel->seq_rx < packet->sequence_number
+               && packet->sequence_number <= (channel->seq_rx + channel->configuration_parameters.n_deferqueue_size * 10)){
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: seq_rx < seq_pdu && seq_pdu <= (seq_rx + 10 * MAX_DEFERQUEUE_SIZE)"
                 , channel_id);
+#endif // PIKEOS_TOOLCHAIN
 
         // check if message is in defer queue
-        if (deferqueue_contains(&channel->defer_q, packet.sequence_number)){
-            logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: packet already in deferq",
+        if (deferqueue_contains(&channel->defer_q, packet->sequence_number)){
+#ifndef PIKEOS_TOOLCHAIN
+            logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: packet already in deferq",
                        channel_id);
+#endif // PIKEOS_TOOLCHAIN
 
             pthread_mutex_unlock(&channel->channel_lock);
             // discard message
@@ -202,22 +229,28 @@ void rasta_red_f_receive(rasta_redundancy_channel * channel, struct RastaRedunda
         } else{
             // check if queue is full
             if (deferqueue_isfull(&channel->defer_q)){
-                logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: deferq full", channel_id);
+#ifndef PIKEOS_TOOLCHAIN
+                logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: deferq full", channel_id);
+#endif // PIKEOS_TOOLCHAIN
 
                 pthread_mutex_unlock(&channel->channel_lock);
                 // full -> discard message
                 return;
             } else{
-                logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: adding message to deferq",
+#ifndef PIKEOS_TOOLCHAIN
+                logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: adding message to deferq",
                            channel_id);
+#endif // PIKEOS_TOOLCHAIN
 
                 // add message to defer queue
                 deferqueue_add(&channel->defer_q, packet, current_ts());
             }
         }
-    } else if (packet.sequence_number > (channel->seq_rx + channel->configuration_parameters.n_deferqueue_size * 10)){
-        logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: seq_pdu > seq_rx + 10 * MAX_DEFERQUEUE_SIZE"
+    } else if (packet->sequence_number > (channel->seq_rx + channel->configuration_parameters.n_deferqueue_size * 10)){
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red receive", "channel %d: seq_pdu > seq_rx + 10 * MAX_DEFERQUEUE_SIZE"
                 , channel_id);
+#endif // PIKEOS_TOOLCHAIN
 
         pthread_mutex_unlock(&channel->channel_lock);
         // discard message
@@ -232,10 +265,10 @@ void rasta_red_f_deferTmo(rasta_redundancy_channel * channel){
     int smallest_index = deferqueue_smallest_seqnr(&channel->defer_q);
 
     // set seq_rx to it
-    channel->seq_rx = channel->defer_q.elements[smallest_index].packet.sequence_number;
+    channel->seq_rx = channel->defer_q.elements[smallest_index].packet->sequence_number;
     pthread_mutex_unlock(&channel->channel_lock);
 
-    logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red f_deferTmo", "calling f_deliverDeferQueue");
+    logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red f_deferTmo", "calling f_deliverDeferQueue");
     deliverDeferQueue(channel);
 }
 
@@ -252,14 +285,14 @@ void rasta_red_add_transport_channel(rasta_redundancy_channel * channel, char * 
 
 
 void rasta_red_cleanup(rasta_redundancy_channel * channel){
-    logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red cleanup", "destroying defer queues");
+    logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red cleanup", "destroying defer queues");
     // destroy the defer queue
     deferqueue_destroy(&channel->defer_q);
 
     // destroy the diagnostics buffer
     deferqueue_destroy(&channel->diagnostics_packet_buffer);
 
-    logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red cleanup", "freeing connected channels");
+    logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red cleanup", "freeing connected channels");
     // free the channels
     for (int i = 0; i < channel->connected_channel_count; ++i) {
         rfree(channel->connected_channels[i].ip_address);
@@ -268,7 +301,7 @@ void rasta_red_cleanup(rasta_redundancy_channel * channel){
     channel->transport_channel_count = 0;
     channel->connected_channel_count = 0;
 
-    logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red cleanup", "freeing FIFO");
+    logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red cleanup", "freeing FIFO");
 
     // free the receive FIFO
     fifo_destroy(channel->fifo_recv);
@@ -277,5 +310,5 @@ void rasta_red_cleanup(rasta_redundancy_channel * channel){
 
     pthread_mutex_destroy(&channel->channel_lock);
 
-    logger_log(&channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red cleanup", "Cleanup complete");
+    logger_log(channel->logger, LOG_LEVEL_DEBUG, "RaSTA Red cleanup", "Cleanup complete");
 }
