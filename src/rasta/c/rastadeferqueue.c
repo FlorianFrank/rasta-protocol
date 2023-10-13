@@ -11,9 +11,14 @@
  */
 int find_index(struct defer_queue * queue, unsigned long seq_nr){
     int index = 0;
+    // Check is now required because queue stored pointers!
+    if(!queue->elements[index].packet)
+        return -1;
 
     // naive implementation of search. performance shouldn't be an issue as the amount of messages in the queue is small
-    while ( index < queue->max_count && queue->elements[index].packet.sequence_number != seq_nr ) ++index;
+    uint32_t sequeceNrCMP = queue->elements[index].packet->sequence_number;
+    uint32_t maxCount = queue->max_count;
+    while ( index < maxCount && sequeceNrCMP != seq_nr ) ++index;
 
     return ( index == queue->max_count ? -1 : index );
 }
@@ -33,22 +38,20 @@ void sort(struct defer_queue * queue){
     qsort(queue->elements, queue->count, sizeof(struct rasta_redundancy_packet_wrapper), cmpfkt);
 }
 
-struct defer_queue deferqueue_init(unsigned int n_max){
-    struct defer_queue queue;
+void defer_queue_init(struct defer_queue *queue, unsigned int n_max) {
 
     // allocate the array
-    queue.elements = rmalloc(n_max * sizeof(struct rasta_redundancy_packet_wrapper));
+    queue->elements = rmalloc(n_max * sizeof(struct rasta_redundancy_packet_wrapper));
+    memset(queue->elements, 0x00, n_max*sizeof(struct rasta_redundancy_packet_wrapper));
 
     // set count to 0
-    queue.count = 0;
+    queue->count = 0;
 
     // set max count
-    queue.max_count = n_max;
+    queue->max_count = n_max;
 
     // init the mutex
-    pthread_mutex_init(&queue.mutex, NULL);
-
-    return queue;
+    pthread_mutex_init(&queue->mutex, NULL);
 }
 
 int deferqueue_isfull(struct defer_queue * queue){
@@ -63,11 +66,12 @@ int deferqueue_isfull(struct defer_queue * queue){
     return result;
 }
 
-void deferqueue_add(struct defer_queue * queue, struct RastaRedundancyPacket packet, unsigned long recv_ts){
+void deferqueue_add(struct defer_queue * queue, struct RastaRedundancyPacket *packet, unsigned long recv_ts){
     // acquire lock
+    // TODO Mutex reintroduced
     pthread_mutex_lock(&queue->mutex);
 
-    if((queue->count == queue->max_count)){
+    if(queue->count == queue->max_count){
         // queue full, return
         pthread_mutex_unlock(&queue->mutex);
         return;
@@ -109,7 +113,7 @@ void deferqueue_remove(struct defer_queue * queue, unsigned long seq_nr){
     }
 
     // free last element
-    freeRastaByteArray(&queue->elements[queue->count -1].packet.data.data);
+    freeRastaByteArray(&queue->elements[queue->count -1].packet->data.data);
 
     // decrease counter
     queue->count = queue->count -1;
@@ -153,8 +157,8 @@ int deferqueue_smallest_seqnr(struct defer_queue * queue){
 
     // naive implementation of search. performance shouldn't be an issue as the amount of messages in the queue is small
     for (int i = 0; i < queue->max_count; ++i) {
-        if(queue->elements[i].packet.sequence_number < smallest){
-            smallest = queue->elements[i].packet.sequence_number;
+        if(queue->elements[i].packet->sequence_number < smallest){
+            smallest = queue->elements[i].packet->sequence_number;
             index = i;
         }
     }
@@ -165,7 +169,8 @@ int deferqueue_smallest_seqnr(struct defer_queue * queue){
     return index;
 }
 
-struct RastaRedundancyPacket deferqueue_get(struct defer_queue * queue, unsigned long seq_nr){
+void
+deferqueue_get(struct RastaRedundancyPacket *result, struct defer_queue *queue, unsigned long seq_nr) {
     // acquire lock
     pthread_mutex_lock(&queue->mutex);
 
@@ -174,16 +179,14 @@ struct RastaRedundancyPacket deferqueue_get(struct defer_queue * queue, unsigned
     if(index == -1){
         pthread_mutex_unlock(&queue->mutex);
         // element not in queue, return uninitialized struct
-        return (const struct RastaRedundancyPacket){ 0 };
+        *result =  (const struct RastaRedundancyPacket){ 0 };
+        return;
     }
 
-    struct RastaRedundancyPacket result = queue->elements[index].packet;
+    *result = *queue->elements[index].packet;
 
     // free lock
     pthread_mutex_unlock(&queue->mutex);
-
-    // return element at index
-    return result;
 }
 
 unsigned long deferqueue_get_ts(struct defer_queue * queue, unsigned long seq_nr){

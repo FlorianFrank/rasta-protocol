@@ -12,6 +12,9 @@ extern "C" {  // only need to export C interface if
               // used by C++ source code
 #endif
 
+#ifdef PIKEOS_TOOLCHAIN
+#include <types.h>
+#endif // PIKEOS_TOOLCHAIN
 #include <pthread.h>
 #include "rastamodule.h"
 
@@ -20,7 +23,7 @@ extern "C" {  // only need to export C interface if
  * this is used as the element type in the defer queue
  */
 struct rasta_redundancy_packet_wrapper{
-    struct RastaRedundancyPacket packet;
+    struct RastaRedundancyPacket* packet;
     unsigned long received_timestamp;
 };
 
@@ -54,7 +57,7 @@ struct defer_queue{
  * @param n_max maximum amount of elements the queue can hold
  * @return an initialized defer queue
  */
-struct defer_queue deferqueue_init(unsigned int n_max);
+void defer_queue_init(struct defer_queue *queue, unsigned int n_max);
 
 /**
  * frees the memory for all elements
@@ -69,7 +72,7 @@ void deferqueue_destroy(struct defer_queue * queue);
  * @param packet the element that will be added
  * @param recv_ts the timestamp when the @p element was received
  */
-void deferqueue_add(struct defer_queue * queue, struct RastaRedundancyPacket packet, unsigned long recv_ts);
+void deferqueue_add(struct defer_queue * queue, struct RastaRedundancyPacket *packet, unsigned long recv_ts);
 
 /**
  * removes the given element from the queue if it exists.
@@ -107,7 +110,8 @@ int deferqueue_smallest_seqnr(struct defer_queue * queue);
  * @return the element with the given @p seq_nr if the element exists in the queue.
  * Otherwise an uninitialized struct will be returned! check with contains beforehand
  */
-struct RastaRedundancyPacket deferqueue_get(struct defer_queue * queue, unsigned long seq_nr);
+void
+deferqueue_get(struct RastaRedundancyPacket *result, struct defer_queue *queue, unsigned long seq_nr);
 
 /**
  * gets the timestamp of the element with the specified sequence_number out of in the defer queue
