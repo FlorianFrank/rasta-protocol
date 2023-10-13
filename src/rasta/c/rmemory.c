@@ -7,6 +7,11 @@
 #include <string.h>
 #include "rmemory.h"
 
+#ifdef PIKEOS_TOOLCHAIN
+#include <stdlib.h>
+#endif // PIKEOS_TOOLCHAIN
+
+
 void * rmalloc(unsigned int size) {
     return malloc(size);
 }

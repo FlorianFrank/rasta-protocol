@@ -10,6 +10,10 @@ extern "C" {  // only need to export C interface if
               // used by C++ source code
 #endif
 
+#ifdef PIKEOS_TOOLCHAIN
+#include <types.h>
+#endif // PIKEOS_TOOLCHAIN
+
 #include <pthread.h>
 #include <stdint.h>
 #include "fifo.h"
