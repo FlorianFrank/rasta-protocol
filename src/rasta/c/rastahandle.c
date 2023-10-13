@@ -40,6 +40,7 @@ void* on_constatechange_call(void * container){
 
     //free container
     rfree(container);
+    return NULL;
 }
 
 /**
@@ -83,6 +84,7 @@ void* on_receive_call(void * container){
 
     //free container
     rfree(container);
+    return NULL;
 }
 
 /**
@@ -124,6 +126,7 @@ void* on_discrequest_change_call(void * container){
 
     //free container
     rfree(container);
+    return NULL;
 }
 
 /**
@@ -178,6 +181,7 @@ void* on_diagnostic_call(void * container){
 
     //free container
     rfree(container);
+    return NULL;
 }
 
 /**
@@ -227,6 +231,7 @@ void * on_handshake_complete_call(void * container){
 
     //free container
     rfree(container);
+    return NULL;
 }
 
 void fire_on_handshake_complete(struct rasta_notification_result result){
@@ -265,6 +270,7 @@ void * on_heartbeat_timeout_call(void * container){
 
     //free container
     rfree(container);
+    return NULL;
 }
 
 void fire_on_hearbeat_timeout(struct rasta_notification_result result){
@@ -487,7 +493,7 @@ void rasta_handle_init(struct rasta_handle *h, const char* config_file_path) {
 
     if (config_accepted_version.type == DICTIONARY_ARRAY) {
         h->receive_handle->accepted_version = allocate_DictionaryArray(config_accepted_version.value.array.count);
-        for (int i = 0; i < config_accepted_version.value.array.count; ++i) {
+        for (unsigned int i = 0; i < config_accepted_version.value.array.count; ++i) {
             logger_log(h->logger, LOG_LEVEL_DEBUG, "RaSTA HANDLE_INIT", "Loaded accepted version: %s", config_accepted_version.value.array.data[i].c);
             struct DictionaryString s;
             rmemcpy(s.c, config_accepted_version.value.array.data[i].c, 256);
