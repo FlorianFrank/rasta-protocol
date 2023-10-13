@@ -6,7 +6,13 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#ifndef PIKEOS_TOOLCHAIN
 #include <syscall.h>
+#else
+#include <lwip/sockets.h> // lwip sockets
+#include <time.h>
+#include <vm.h>
+#endif // PIKEOS_TOOLCHAIN
 #include "rmemory.h"
 #include "udp.h"
 #include "rastautil.h"
@@ -106,11 +112,11 @@ void red_call_on_new_connection(redundancy_mux * mux, unsigned long id){
     wrapper->id = id;
 
     if (pthread_create(&caller_thread, NULL, red_on_new_connection_caller, wrapper)){
-        logger_log(&mux->logger, LOG_LEVEL_ERROR, "RaSTA Redundancy call onNewConnection", "error while creating thread");
+        logger_log(mux->logger, LOG_LEVEL_ERROR, "RaSTA Redundancy call onNewConnection", "error while creating thread");
         exit(1);
     }
 
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA Redundancy call onNewConnection", "called onNewConnection");
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA Redundancy call onNewConnection", "called onNewConnection");
 }
 
 
@@ -123,7 +129,7 @@ void red_call_on_new_connection(redundancy_mux * mux, unsigned long id){
 void* red_on_diagnostic_caller(void * wrapper){
     struct diagnose_notification_parameter_wrapper * w = (struct diagnose_notification_parameter_wrapper * )wrapper;
 
-    logger_log(&w->mux->logger, LOG_LEVEL_DEBUG, "RaSTA Redundancy onDiagnostics caller", "calling onDiagnostics function");
+    logger_log(w->mux->logger, LOG_LEVEL_DEBUG, "RaSTA Redundancy onDiagnostics caller", "calling onDiagnostics function");
     (*w->mux->notifications.on_diagnostics_available)(w->mux, w->n_diagnose, w->n_missed, w->t_drift, w->t_drift2, w->channel_id);
 
     w->mux->notifications_running = (unsigned short)(w->mux->notifications_running -1);
@@ -164,11 +170,11 @@ void red_call_on_diagnostic(redundancy_mux * mux, int n_diagnose,
     wrapper->channel_id = id;
 
     if (pthread_create(&caller_thread, NULL, red_on_diagnostic_caller, wrapper)){
-        logger_log(&mux->logger, LOG_LEVEL_ERROR, "RaSTA Redundancy call onDiagnostics", "error while creating thread");
+        logger_log(mux->logger, LOG_LEVEL_ERROR, "RaSTA Redundancy call onDiagnostics", "error while creating thread");
         exit(1);
     }
 
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA Redundancy call onDiagnostics", "called onDiagnostics");
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA Redundancy call onDiagnostics", "called onDiagnostics");
 }
 
 
@@ -191,7 +197,9 @@ struct receive_thread_parameter_wrapper{
  * @param channel_id the index of the udp socket
  */
 void receive_packet(redundancy_mux * mux, int channel_id){
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive", "Receive called");
+#ifndef PIKEOS_TOOLCHAIN
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive", "Receive called");
+#endif // PIKEOS_TOOLCHAIN
 
     // receive a packet
     unsigned char * buffer = rmalloc(sizeof(unsigned char) * MAX_DEFER_QUEUE_MSG_SIZE);
@@ -202,17 +210,20 @@ void receive_packet(redundancy_mux * mux, int channel_id){
     pthread_mutex_lock(&mux->lock);
     int fd = mux->udp_socket_fds[channel_id];
     pthread_mutex_unlock(&mux->lock);
-
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive", "channel %d waiting for data on fd %d...", channel_id, fd);
+#ifndef PIKEOS_TOOLCHAIN
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive", "channel %d waiting for data on fd %d...", channel_id, fd);
+#endif // PIKEOS_TOOLCHAIN
 
     // wait for pdu
     size_t len = udp_receive(fd, buffer, MAX_DEFER_QUEUE_MSG_SIZE, &sender);
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive", "channel %d received data on upd", channel_id);
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive", "channel %d received data len = %d", channel_id, len);
+#ifndef PIKEOS_TOOLCHAIN
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive", "channel %d received data on upd", channel_id);
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive", "channel %d received data len = %d", channel_id, len);
+#endif // PIKEOS_TOOLCHAIN
 
-    struct RastaByteArray incomingData;
-    incomingData.length = (unsigned int)len;
-    incomingData.bytes = buffer;
+    struct RastaByteArray* incomingData = malloc(sizeof(struct RastaByteArray));
+    incomingData->length = (unsigned int)len;
+    incomingData->bytes = buffer;
 
     rasta_hashing_context_t test;
     struct crc_options options;
@@ -224,33 +235,30 @@ void receive_packet(redundancy_mux * mux, int channel_id){
     rmemcpy(test.key.bytes, mux->sr_hashing_context.key.bytes, mux->sr_hashing_context.key.length);
     rmemcpy(&options, &mux->config.redundancy.crc_type, sizeof(mux->config.redundancy.crc_type));
     pthread_mutex_unlock(&mux->lock);
-
-    struct RastaRedundancyPacket receivedPacket = bytesToRastaRedundancyPacket(incomingData,
-            options, &test);
+    struct RastaRedundancyPacket *receivedPacket = malloc(sizeof(struct RastaRedundancyPacket));
+    bytesToRastaRedundancyPacket(receivedPacket, incomingData,&options, &test);
 
     freeRastaByteArray(&test.key);
-
-
     rasta_transport_channel connected_channel;
     connected_channel.ip_address = rmalloc(sizeof(char) * 15);
-    sockaddr_to_host(sender,connected_channel.ip_address);
+    sockaddr_to_host(sender, connected_channel.ip_address);
     connected_channel.port = ntohs(sender.sin_port);
 
     // find assiociated redundancy channel
     pthread_mutex_lock(&mux->lock);
     for (int i = 0; i < mux->channel_count; ++i) {
-        if (receivedPacket.data.sender_id == mux->connected_channels[i].associated_id){
+        if (receivedPacket->data.sender_id == mux->connected_channels[i].associated_id){
             // found redundancy channel with associated id
             // need to check if redundancy channel already knows ip & port of sender
-            rasta_redundancy_channel channel = mux->connected_channels[i];
-            if (channel.connected_channel_count < mux->port_count){
+            rasta_redundancy_channel* channel = &mux->connected_channels[i];
+            if (channel->connected_channel_count < mux->port_count){
                 // not all remote transport channel endpoints discovered
 
                 int is_channel_saved= 0;
 
-                for (int j = 0; j < channel.connected_channel_count; ++j) {
-                    if (channel.connected_channels[j].port == connected_channel.port &&
-                        strcmp(connected_channel.ip_address, channel.connected_channels[j].ip_address) == 0){
+                for (int j = 0; j < channel->connected_channel_count; ++j) {
+                    if (channel->connected_channels[j].port == connected_channel.port &&
+                        strcmp(connected_channel.ip_address, channel->connected_channels[j].ip_address) == 0){
                         // channel is already saved
                         is_channel_saved = 1;
                     }
@@ -258,36 +266,38 @@ void receive_packet(redundancy_mux * mux, int channel_id){
 
                 if (!is_channel_saved){
                     // channel wasn't saved yet -> add to list
-                    mux->connected_channels[i].connected_channels[channel.connected_channel_count].ip_address = connected_channel.ip_address;
-                    mux->connected_channels[i].connected_channels[channel.connected_channel_count].port = connected_channel.port;
+                    mux->connected_channels[i].connected_channels[channel->connected_channel_count].ip_address = connected_channel.ip_address;
+                    mux->connected_channels[i].connected_channels[channel->connected_channel_count].port = connected_channel.port;
                     mux->connected_channels[i].connected_channel_count++;
 
-                    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive", "channel %d discovered client transport channel %s:%d for connection to 0x%lX",
-                               channel_id, connected_channel.ip_address, connected_channel.port, channel.associated_id);
+#ifndef PIKEOS_TOOLCHAIN
+                    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive", "channel %d discovered client transport channel %s:%d for connection to 0x%lX",
+                               channel_id, connected_channel.ip_address, connected_channel.port, channel->associated_id);
+#endif // PIKEOS_TOOLCHAIN
                 } else {
                     // temp channel no longer needed -> free memory
                     rfree(connected_channel.ip_address);
                 }
             }
 
-
-            // call the receive function of the associated channel
-            /*logger_log(&mux->logger, LOG_LEVEL_DEBUG, "MUX", "count=%d", mux->channel_count);
-            for (int k = 0; k < mux->channel_count; ++k) {
-                logger_log(&mux->logger, LOG_LEVEL_DEBUG, "MUX", "channel %d, id=%0x%lX", i, mux->connected_channels[i].associated_id);
-            }*/
-            rasta_red_f_receive(redundancy_mux_get_channel(mux, receivedPacket.data.sender_id), receivedPacket, channel_id);
+            rasta_redundancy_channel* channelTmp = redundancy_mux_get_channel(mux, receivedPacket->data.sender_id);
+            rasta_red_f_receive(channelTmp, receivedPacket, channel_id);
 
             pthread_mutex_unlock(&mux->lock);
             rfree(buffer);
+            free(receivedPacket);
+            free(incomingData);
             return;
         }
     }
 
     // no associated channel found -> received message from new partner
-    logger_log(&mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux receive", "received pdu from unknown entity with id=0x%lX", receivedPacket.data.sender_id);
-    rasta_redundancy_channel new_channel = rasta_red_init(mux->logger, mux->config, mux->port_count, receivedPacket.data.sender_id);
-    new_channel.associated_id = receivedPacket.data.sender_id;
+#ifndef PIKEOS_TOOLCHAIN
+    logger_log(mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux receive", "received pdu from unknown entity with id=0x%lX", receivedPacket->data.sender_id);
+#endif // PIKEOS_TOOLCHAIN
+    rasta_redundancy_channel new_channel;
+    rasta_red_init(&new_channel, mux->logger, &mux->config, mux->port_count, receivedPacket->data.sender_id);
+    new_channel.associated_id = receivedPacket->data.sender_id;
     // add transport channel to redundancy channel
     new_channel.connected_channels[0].ip_address = connected_channel.ip_address;
     new_channel.connected_channels[0].port= connected_channel.port;
@@ -305,10 +315,14 @@ void receive_packet(redundancy_mux * mux, int channel_id){
     red_call_on_new_connection(mux, new_channel.associated_id);
 
     // call receive function of new channel
-    rasta_red_f_receive(redundancy_mux_get_channel(mux, new_channel.associated_id), receivedPacket, channel_id);
+    rasta_redundancy_channel * channel = redundancy_mux_get_channel(mux, new_channel.associated_id);
+    rasta_red_f_receive(channel, receivedPacket, channel_id);
     pthread_mutex_unlock(&mux->lock);
 
     // free receive buffer
+    // TODO changed from previous version
+    free(receivedPacket);
+    free(incomingData);
     rfree(buffer);
 }
 
@@ -326,8 +340,10 @@ void * channel_receive_handler(void * arg_wrapper){
 
     struct receive_thread_parameter_wrapper * args = (struct receive_thread_parameter_wrapper*)arg_wrapper;
 
-    logger_log(&args->mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive thread", "Thread %d running",
+#ifndef PIKEOS_TOOLCHAIN
+    logger_log(args->mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive thread", "Thread %d running",
                args->channel_index);
+#endif // PIKEOS_TOOLCHAIN
 
     // set diagnose window start time
     //args->mux->channels[args->channel_index].diagnostics_data.start_time = current_ts();
@@ -391,12 +407,16 @@ void * channel_receive_handler(void * arg_wrapper){
             mux_channel_count = args->mux->channel_count;
             pthread_mutex_unlock(&args->mux->lock);
         }
-
-        logger_log(&args->mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive thread", "Thread %d calling receive",
-                   args->channel_index);
         receive_packet(args->mux, args->channel_index);
-        logger_log(&args->mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive thread", "Thread %d receive done",
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(args->mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive thread", "Thread %d calling receive",
                    args->channel_index);
+#endif
+        receive_packet(args->mux, args->channel_index);
+#ifndef PIKEOS_TOOLCHAIN
+        logger_log(args->mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive thread", "Thread %d receive done",
+                   args->channel_index);
+#endif // PIKEOS_TOOLCHAIN
 
         pthread_mutex_lock(&args->mux->lock);
         open = args->mux->is_open;
@@ -406,8 +426,10 @@ void * channel_receive_handler(void * arg_wrapper){
         //nanosleep((const struct timespec[]){{0, 0L}}, NULL);
     }
 
-    logger_log(&args->mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive thread", "Thread %d stopped",
+#ifndef PIKEOS_TOOLCHAIN
+    logger_log(args->mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux receive thread", "Thread %d stopped",
                args->channel_index);
+#endif // PIKEOS_TOOLCHAIn
 
     // free memory of arg wrapper that has been allocated in rasta_redundancy_open
     rfree(arg_wrapper);
@@ -421,7 +443,7 @@ void * channel_receive_handler(void * arg_wrapper){
 void * channel_timeout_handler(void* mux){
     redundancy_mux * mx = (redundancy_mux *) mux;
 
-    logger_log(&mx->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux timeout thread", "Timeout thread running");
+    logger_log(mx->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux timeout thread", "Timeout thread running");
 
     pthread_mutex_lock(&mx->lock);
     int open = mx->is_open;
@@ -456,7 +478,7 @@ void * channel_timeout_handler(void* mux){
             if ((current_time - channel_oldest_ts) > channel_t_seq){
                 // timeout, send to next layer
 
-                logger_log(&mx->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux timeout thread", "timout detected for connection %d. calling f_deferTmo", i);
+                logger_log(mx->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux timeout thread", "timout detected for connection %d. calling f_deferTmo", i);
                 rasta_red_f_deferTmo(&current_channel);
             } else{
                 sleep_time = 1000* (channel_t_seq - (current_time - channel_oldest_ts));
@@ -471,12 +493,12 @@ void * channel_timeout_handler(void* mux){
         sleep_time = 100000;
     }
 
-    logger_log(&mx->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux timeout thread", "Timeout thread stopped");
+    logger_log(mx->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux timeout thread", "Timeout thread stopped");
 }
 
 /* ----------------------------*/
 
-redundancy_mux redundancy_mux_init_(struct logger_t logger, struct RastaConfigInfo config){
+redundancy_mux redundancy_mux_init_(struct logger_t *logger, struct RastaConfigInfo config){
     redundancy_mux mux;
 
     mux.logger = logger;
@@ -490,7 +512,7 @@ redundancy_mux redundancy_mux_init_(struct logger_t logger, struct RastaConfigIn
     // initialize the multiplexer mutex
     pthread_mutex_init(&mux.lock, NULL);
 
-    logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "init memory for %d listen ports", mux.port_count);
+    logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "init memory for %d listen ports", mux.port_count);
 
     // init and bind udp sockets + threads array
     mux.udp_socket_fds = rmalloc(mux.port_count * sizeof(int));
@@ -507,7 +529,7 @@ redundancy_mux redundancy_mux_init_(struct logger_t logger, struct RastaConfigIn
 
     // load ports that are specified in config
     if (mux.config.redundancy.connections.count > 0){
-        logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "loading listen from config");
+        logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "loading listen from config");
 
         mux.listen_ports = rmalloc(sizeof(uint16_t) * mux.config.redundancy.connections.count);
         for (int j = 0; j < mux.config.redundancy.connections.count; ++j) {
@@ -515,8 +537,7 @@ redundancy_mux redundancy_mux_init_(struct logger_t logger, struct RastaConfigIn
             mux.udp_socket_fds[j] = udp_init();
 
             // bind socket to device and port
-            udp_bind_device(mux.udp_socket_fds[j],
-                            (uint16_t )mux.config.redundancy.connections.data[j].port,
+            udp_bind_device(mux.udp_socket_fds[j], (uint16_t) mux.config.redundancy.connections.data[j].port,
                             mux.config.redundancy.connections.data[j].ip);
 
             mux.listen_ports[j] = (uint16_t )mux.config.redundancy.connections.data[j].port;
@@ -542,11 +563,11 @@ redundancy_mux redundancy_mux_init_(struct logger_t logger, struct RastaConfigIn
         mux.sr_hashing_context.key.bytes[3] = (config.sending.sr_hash_key) & 0xFF;
     }
 
-    logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "initialization done");
+    logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "initialization done");
     return mux;
 }
 
-redundancy_mux redundancy_mux_init(struct logger_t logger, uint16_t * listen_ports, unsigned int port_count, struct RastaConfigInfo config){
+redundancy_mux redundancy_mux_init(struct logger_t *logger, uint16_t * listen_ports, unsigned int port_count, struct RastaConfigInfo config){
     redundancy_mux mux;
 
     mux.logger = logger;
@@ -560,7 +581,7 @@ redundancy_mux redundancy_mux_init(struct logger_t logger, uint16_t * listen_por
     // initialize the multiplexer mutex
     pthread_mutex_init(&mux.lock, NULL);
 
-    logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "init memory for %d listen ports", port_count);
+    logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "init memory for %d listen ports", port_count);
 
     // init and bind udp sockets + threads array
     mux.udp_socket_fds = rmalloc(port_count * sizeof(int));
@@ -568,7 +589,7 @@ redundancy_mux redundancy_mux_init(struct logger_t logger, uint16_t * listen_por
 
     // set up udp sockets
     for (int i = 0; i < port_count; ++i) {
-        logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "setting up udp socket %d/%d", i+1,port_count);
+        logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "setting up udp socket %d/%d", i+1,port_count);
         mux.udp_socket_fds[i] = udp_init();
         udp_bind(mux.udp_socket_fds[i], listen_ports[i]);
     }
@@ -583,14 +604,15 @@ redundancy_mux redundancy_mux_init(struct logger_t logger, uint16_t * listen_por
 
     // load channel that is specified in config
     if (mux.config.redundancy.connections.count > 0){
-        logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "loading redundancy channel from config");
-        rasta_redundancy_channel new_channel = rasta_red_init(mux.logger, mux.config, mux.port_count, mux.config.general.rasta_id);
+        logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "loading redundancy channel from config");
+        rasta_redundancy_channel new_channel;
+        rasta_red_init(&new_channel, mux.logger, &mux.config, mux.port_count, mux.config.general.rasta_id);
         new_channel.associated_id = 0x0;
 
         for (int j = 0; j < mux.config.redundancy.connections.count; ++j) {
-            logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "setting up transport channel %d/%d",
+            logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "setting up transport channel %d/%d",
                        j+1, mux.config.redundancy.connections.count);
-            logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "transport channel: ip=%s, port=%d",
+            logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "transport channel: ip=%s, port=%d",
                        mux.config.redundancy.connections.data[j].ip, mux.config.redundancy.connections.data[j].port);
             // no associated channel found -> received message from new partner
             // add transport channel to redundancy channel
@@ -603,11 +625,11 @@ redundancy_mux redundancy_mux_init(struct logger_t logger, uint16_t * listen_por
         mux.channel_count++;
     }
 
-    logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "initialization done");
+    logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "initialization done");
     return mux;
 }
 
-redundancy_mux redundancy_mux_init_with_devices(struct logger_t logger, struct RastaIPData * listen_ports, unsigned int port_count, struct RastaConfigInfo config){
+redundancy_mux redundancy_mux_init_with_devices(struct logger_t *logger, struct RastaIPData * listen_ports, unsigned int port_count, struct RastaConfigInfo config){
     redundancy_mux mux;
 
     mux.logger = logger;
@@ -621,7 +643,7 @@ redundancy_mux redundancy_mux_init_with_devices(struct logger_t logger, struct R
     // initialize the multiplexer mutex
     pthread_mutex_init(&mux.lock, NULL);
 
-    logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "init memory for %d listen ports", port_count);
+    logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "init memory for %d listen ports", port_count);
 
     // init and bind udp sockets + threads array
     mux.udp_socket_fds = rmalloc(port_count * sizeof(int));
@@ -629,9 +651,9 @@ redundancy_mux redundancy_mux_init_with_devices(struct logger_t logger, struct R
 
     // set up udp sockets
     for (int i = 0; i < port_count; ++i) {
-        logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "setting up udp socket %d/%d", i+1,port_count);
+        logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "setting up udp socket %d/%d", i+1,port_count);
         mux.udp_socket_fds[i] = udp_init();
-        udp_bind_device(mux.udp_socket_fds[i], (uint16_t)listen_ports[i].port, listen_ports[i].ip);
+        udp_bind_device(mux.udp_socket_fds[i], (uint16_t) listen_ports[i].port, listen_ports[i].ip);
     }
 
     // allocate memory for connected channels
@@ -644,14 +666,15 @@ redundancy_mux redundancy_mux_init_with_devices(struct logger_t logger, struct R
 
     // load channel that is specified in config
     if (mux.config.redundancy.connections.count > 0){
-        logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "loading redundancy channel from config");
-        rasta_redundancy_channel new_channel = rasta_red_init(mux.logger, mux.config, mux.port_count, mux.config.general.rasta_id);
+        logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "loading redundancy channel from config");
+        rasta_redundancy_channel new_channel;
+        rasta_red_init(&new_channel, mux.logger, &mux.config, mux.port_count, mux.config.general.rasta_id);
         new_channel.associated_id = 0x0;
 
         for (int j = 0; j < mux.config.redundancy.connections.count; ++j) {
-            logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "setting up transport channel %d/%d",
+            logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "setting up transport channel %d/%d",
                        j+1, mux.config.redundancy.connections.count);
-            logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "transport channel: ip=%s, port=%d",
+            logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "transport channel: ip=%s, port=%d",
                        mux.config.redundancy.connections.data[j].ip, mux.config.redundancy.connections.data[j].port);
             // no associated channel found -> received message from new partner
             // add transport channel to redundancy channel
@@ -664,7 +687,7 @@ redundancy_mux redundancy_mux_init_with_devices(struct logger_t logger, struct R
         mux.channel_count++;
     }
 
-    logger_log(&mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "initialization done");
+    logger_log(mux.logger, LOG_LEVEL_DEBUG, "RaSTA RedMux init", "initialization done");
     return mux;
 }
 
@@ -674,14 +697,14 @@ void redundancy_mux_open(redundancy_mux * mux){
         return;
     }
 
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux open", "channels : %d", mux->port_count);
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux open", "channels : %d", mux->port_count);
 
     // set open to true here to let threads run as soon as they are created
     mux->is_open = 1;
 
     // start receive threads for transport channels
     for (int i = 0; i < mux->port_count; ++i) {
-        logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux open",
+        logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux open",
                    "opening transport channel %d/%d", i+1, mux->port_count);
 
         struct receive_thread_parameter_wrapper * wrapper = rmalloc(sizeof(struct receive_thread_parameter_wrapper));
@@ -692,27 +715,27 @@ void redundancy_mux_open(redundancy_mux * mux){
 
         // start the received thread for the port
         if (pthread_create(&recv_thread, NULL, channel_receive_handler, wrapper)){
-            logger_log(&mux->logger, LOG_LEVEL_ERROR, "RaSTA RedMux open", "error while creating thread");
+            logger_log(mux->logger, LOG_LEVEL_ERROR, "RaSTA RedMux open", "error while creating thread");
             exit(1);
         }
 
         // set the thread in list (needed for cancel)
         mux->transport_receive_threads[i] = recv_thread;
 
-        logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux open",
+        logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux open",
                    "listen thread for port %d started", mux->listen_ports[wrapper->channel_index]);
     }
 
     // start timeout thread
     pthread_t tmo_thread;
     if (pthread_create(&tmo_thread, NULL, channel_timeout_handler, mux)){
-        logger_log(&mux->logger, LOG_LEVEL_ERROR, "RaSTA RedMux open", "error while creating timeout thread");
+        logger_log(mux->logger, LOG_LEVEL_ERROR, "RaSTA RedMux open", "error while creating timeout thread");
         exit(1);
     }
     mux->timeout_thread = tmo_thread;
 
 
-    logger_log(&mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux open", "redundancy multiplexer is ready");
+    logger_log(mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux open", "redundancy multiplexer is ready");
 }
 
 void redundancy_mux_close(redundancy_mux * mux){
@@ -721,13 +744,13 @@ void redundancy_mux_close(redundancy_mux * mux){
 
     // close the sockets of the transport channels
     for (int i = 0; i < mux->port_count; ++i) {
-        logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux close", "closing udp socket %d/%d", i+1, mux->port_count);
+        logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux close", "closing udp socket %d/%d", i+1, mux->port_count);
         pthread_cancel(mux->transport_receive_threads[i]);
         udp_close(mux->udp_socket_fds[i]);
     }
 
     // free arrays
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux close", "freeing thread data");
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux close", "freeing thread data");
     rfree(mux->udp_socket_fds);
     rfree(mux->transport_receive_threads);
     mux->port_count = 0;
@@ -737,14 +760,14 @@ void redundancy_mux_close(redundancy_mux * mux){
 
     // close the redundancy channels
     for (int j = 0; j < mux->channel_count; ++j) {
-        logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux close", "cleanup connected channel %d/%d", j+1, mux->channel_count);
+        logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux close", "cleanup connected channel %d/%d", j+1, mux->channel_count);
         rasta_red_cleanup(&mux->connected_channels[j]);
     }
     rfree(mux->connected_channels);
 
     freeRastaByteArray(&mux->sr_hashing_context.key);
 
-    logger_log(&mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux close", "redundancy multiplexer closed");
+    logger_log(mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux close", "redundancy multiplexer closed");
 }
 
 rasta_redundancy_channel * redundancy_mux_get_channel(redundancy_mux * mux, unsigned long id){
@@ -768,23 +791,23 @@ void redundancy_mux_set_config_id(redundancy_mux * mux, unsigned long id){
 }
 
 void redundancy_mux_send(redundancy_mux * mux, struct RastaPacket data){
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "sending a data packet to id 0x%lX", data.receiver_id);
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "sending a data packet to id 0x%lX", data.receiver_id);
 
     // get the channel to the remote entity by the data's received_id
     rasta_redundancy_channel * receiver = redundancy_mux_get_channel(mux, data.receiver_id);
 
     if (receiver == NULL){
-        logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "redundancy channel with id=0x%lX unknown", data.receiver_id);
+        logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "redundancy channel with id=0x%lX unknown", data.receiver_id);
         // not receiver found
         return;
     }
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "current seq_tx=%d", receiver->seq_tx);
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "current seq_tx=%d", receiver->seq_tx);
 
     // create packet to send and convert to byte array
     struct RastaRedundancyPacket packet = createRedundancyPacket(receiver->seq_tx, data, mux->config.redundancy.crc_type);
     struct RastaByteArray data_to_send = rastaRedundancyPacketToBytes(packet, &receiver->hashing_context);
 
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "redundancy packet created");
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "redundancy packet created");
 
     // increase seq_tx
     receiver->seq_tx = receiver->seq_tx +1;
@@ -792,7 +815,7 @@ void redundancy_mux_send(redundancy_mux * mux, struct RastaPacket data){
     // send on every transport channels
     rasta_transport_channel channel;
     for (int i = 0; i < receiver->connected_channel_count; ++i) {
-        logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "Sending on transport channel %d/%d",
+        logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "Sending on transport channel %d/%d",
                    i+1, receiver->connected_channel_count);
 
         channel = receiver->connected_channels[i];
@@ -800,13 +823,13 @@ void redundancy_mux_send(redundancy_mux * mux, struct RastaPacket data){
         // send using the channel specific udp socket
         udp_send(mux->udp_socket_fds[i], data_to_send.bytes, data_to_send.length, channel.ip_address, channel.port);
 
-        logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "Sent data over channel %s:%d",
+        logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux send", "Sent data over channel %s:%d",
                    channel.ip_address, channel.port);
     }
 
     freeRastaByteArray(&data_to_send);
 
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA Red send", "Data sent over all transport channels");
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA Red send", "Data sent over all transport channels");
 }
 
 struct RastaPacket redundancy_mux_retrieve(redundancy_mux * mux, unsigned long id){
@@ -814,7 +837,7 @@ struct RastaPacket redundancy_mux_retrieve(redundancy_mux * mux, unsigned long i
     rasta_redundancy_channel * target = redundancy_mux_get_channel(mux, id);
 
     if (target == NULL){
-        logger_log(&mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux retrieve", "entity with id 0x%lX not connected, waiting...", id);
+        logger_log(mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux retrieve", "entity with id 0x%lX not connected, waiting...", id);
     }
 
     // if ID is unknown, wait until available
@@ -835,11 +858,12 @@ struct RastaPacket redundancy_mux_retrieve(redundancy_mux * mux, unsigned long i
         //nanosleep((const struct timespec[]){{0, 0L}}, NULL);
     }
 
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux retrieve", "Found element in queue");
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux retrieve", "Found element in queue");
 
     element = fifo_pop(target->fifo_recv);
 
-    struct RastaPacket packet = bytesToRastaPacket(*element, &target->hashing_context);
+    struct RastaPacket packet;
+    bytesToRastaPacket(&packet, element, &target->hashing_context);
 
     freeRastaByteArray(element);
     rfree(element);
@@ -849,31 +873,32 @@ struct RastaPacket redundancy_mux_retrieve(redundancy_mux * mux, unsigned long i
 
 void redundancy_mux_wait_for_notifications(redundancy_mux * mux){
     if (mux->notifications_running == 0){
-        logger_log(&mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux wait", "all notification threads finished");
+        logger_log(mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux wait", "all notification threads finished");
         return;
     }
-    logger_log(&mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux wait", "waiting for %d notification thread(s) to finish", mux->notifications_running);
+    logger_log(mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux wait", "waiting for %d notification thread(s) to finish", mux->notifications_running);
     while (mux->notifications_running > 0){
         // busy wait
         // to avoid to much CPU utilization, force context switch by sleeping for 0ns
         nanosleep((const struct timespec[]){{0, 0L}}, NULL);
     }
-    logger_log(&mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux wait", "all notification threads finished");
+    logger_log(mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux wait", "all notification threads finished");
 }
 
 void redundancy_mux_wait_for_entity(redundancy_mux * mux, unsigned long id){
-    logger_log(&mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux wait", "waiting for entity with id=0x%lX", id);
+    logger_log(mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux wait", "waiting for entity with id=0x%lX", id);
     rasta_redundancy_channel * target = NULL;
     while (target == NULL){
         target = redundancy_mux_get_channel(mux, id);
         // to avoid to much CPU utilization, force context switch by sleeping for 0ns
         nanosleep((const struct timespec[]){{0, 0L}}, NULL);
     }
-    logger_log(&mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux wait", "entity with id=0x%lX available", id);
+    logger_log(mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux wait", "entity with id=0x%lX available", id);
 }
 
 void redundancy_mux_add_channel(redundancy_mux * mux, unsigned long id, struct RastaIPData * transport_channels){
-    rasta_redundancy_channel channel = rasta_red_init(mux->logger, mux->config, mux->port_count, id);
+    rasta_redundancy_channel channel;
+    rasta_red_init(&channel, mux->logger, &mux->config, mux->port_count, id);
 
     // add transport channels
     for (int i = 0; i < mux->port_count; ++i) {
@@ -888,12 +913,12 @@ void redundancy_mux_add_channel(redundancy_mux * mux, unsigned long id, struct R
     mux->channel_count++;
     pthread_mutex_unlock(&mux->lock);
 
-    logger_log(&mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux add channel", "added new redundancy channel for ID=0x%X", id);
+    logger_log(mux->logger, LOG_LEVEL_INFO, "RaSTA RedMux add channel", "added new redundancy channel for ID=0x%X", id);
 }
 
 void redundancy_mux_remove_channel(redundancy_mux * mux, unsigned long channel_id){
     rasta_redundancy_channel * channel = redundancy_mux_get_channel(mux, channel_id);
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux remove channel", "removing channel with ID=0x%X", channel_id);
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux remove channel", "removing channel with ID=0x%X", channel_id);
 
     if (channel == NULL){
         // no channel with given id
@@ -908,12 +933,12 @@ void redundancy_mux_remove_channel(redundancy_mux * mux, unsigned long channel_i
         rasta_redundancy_channel c = mux->connected_channels[i];
 
         if (c.associated_id == channel_id){
-            logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux remove channel", "skipping channel with ID=0x%X", c.associated_id);
+            logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux remove channel", "skipping channel with ID=0x%X", c.associated_id);
             // channel to remove, skip
             continue;
         }
 
-        logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux remove channel", "copy channel with ID=0x%X", c.associated_id);
+        logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux remove channel", "copy channel with ID=0x%X", c.associated_id);
         // otherwise copy to new channel array
         new_channels[newIndex] = c;
         newIndex++;
@@ -922,7 +947,7 @@ void redundancy_mux_remove_channel(redundancy_mux * mux, unsigned long channel_i
     rfree(mux->connected_channels);
     mux->connected_channels = new_channels;
     mux->channel_count --;
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux remove channel", "%d channels left", mux->channel_count);
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux remove channel", "%d channels left", mux->channel_count);
     pthread_mutex_unlock(&mux->lock);
 }
 
@@ -954,7 +979,7 @@ unsigned int get_queue_msg_count(redundancy_mux * mux, int redundancy_channel_in
 }
 
 struct RastaPacket redundancy_mux_retrieve_all(redundancy_mux * mux){
-    logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux retrieve all", "waiting for message on any connection");
+    logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux retrieve all", "waiting for message on any connection");
     int current_index = 0;
     while (1){
         if (mux->channel_count == 0){
@@ -968,7 +993,7 @@ struct RastaPacket redundancy_mux_retrieve_all(redundancy_mux * mux){
         }
 
         if (get_queue_msg_count(mux, current_index) > 0){
-            logger_log(&mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux retrieve all", "channel with index %d has messages", current_index);
+            logger_log(mux->logger, LOG_LEVEL_DEBUG, "RaSTA RedMux retrieve all", "channel with index %d has messages", current_index);
             return redundancy_mux_retrieve(mux, mux->connected_channels[current_index].associated_id);
         }
 

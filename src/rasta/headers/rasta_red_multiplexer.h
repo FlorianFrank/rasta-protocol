@@ -6,6 +6,10 @@ extern "C" {  // only need to export C interface if
               // used by C++ source code
 #endif
 
+#ifdef PIKEOS_TOOLCHAIN
+#include <types.h> // size_t
+#endif // PIKEOS_TOOLCHAIN
+
 #include <pthread.h>
 #include <stdint.h>
 #include "rastamodule.h"
@@ -90,7 +94,7 @@ struct redundancy_mux{
     /**
      * the logger that is used to log information
      */
-    struct logger_t logger;
+    struct logger_t *logger;
 
     /**
      * array of the thread that are receiving data on the listen ports.
@@ -137,7 +141,7 @@ struct redundancy_mux{
  * @param config configuration for redundancy channels
  * @return an initialized redundancy layer multiplexer
  */
-redundancy_mux redundancy_mux_init(struct logger_t logger, uint16_t * listen_ports, unsigned int port_count, struct RastaConfigInfo config);
+redundancy_mux redundancy_mux_init(struct logger_t *logger, uint16_t * listen_ports, unsigned int port_count, struct RastaConfigInfo config);
 
 /**
  * initializes an redundancy layer multiplexer. The ports and interfaces to listen on are read from the config.
@@ -145,7 +149,7 @@ redundancy_mux redundancy_mux_init(struct logger_t logger, uint16_t * listen_por
  * @param config configuration for redundancy channels
  * @return an initialized redundancy layer multiplexer
  */
-redundancy_mux redundancy_mux_init_(struct logger_t logger, struct RastaConfigInfo config);
+redundancy_mux redundancy_mux_init_(struct logger_t *logger, struct RastaConfigInfo config);
 /**
  * starts the redundancy layer multiplexer and opens (if specified) all redundancy channels
  * @param mux the multiplexer that will be opened
