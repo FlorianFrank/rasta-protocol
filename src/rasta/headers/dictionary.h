@@ -136,7 +136,7 @@ int dictionary_addArray(struct Dictionary* dict, const char key[265], struct Dic
  * @param key
  * @return
  */
-struct DictionaryEntry dictionary_get(struct Dictionary* dict, const char key[265]);
+struct DictionaryEntry dictionary_get(struct Dictionary* dict, const char *key);
 
 
 #ifdef __cplusplus

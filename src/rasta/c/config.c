@@ -264,7 +264,7 @@ int parser_parseArray(struct LineParser *p, struct DictionaryArray * array) {
  * @param key
  * @return
  */
-void parser_parseValue(struct LineParser *p, const char key[256]) {
+void parser_parseValue(struct LineParser *p, const char *key) {
     //skip empty start
     parser_skipBlanc(p);
 
@@ -423,7 +423,7 @@ struct RastaIPData extractIPData(char data[256], int arrayIndex) {
         pos = 1;
     } else {
         //check ip format
-        for (int i = 0; i < strlen(data); i++) {
+        for (unsigned int i = 0; i < strlen(data); i++) {
             if (isdigit(data[i])) {
                 numbers++;
                 if (numbers > 3) {
@@ -457,7 +457,7 @@ struct RastaIPData extractIPData(char data[256], int arrayIndex) {
 
     //get port
     int j = 0;
-    for (int i = pos+1; i < strlen(data); i++) {
+    for (unsigned int i = pos+1; i < strlen(data); i++) {
         if (isdigit(data[i])) {
             port[j] = data[i];
         }
@@ -652,15 +652,14 @@ void config_setstd(struct RastaConfig * cfg) {
 
     //redundancy channels
     entr = config_get(cfg, "RASTA_REDUNDANCY_CONNECTIONS");
-    if (entr.type != DICTIONARY_ARRAY || entr.value.array.count < 0) {
+    if (entr.type != DICTIONARY_ARRAY)
         //set std
         cfg->values.redundancy.connections.count = 0;
-    }
     else {
         cfg->values.redundancy.connections.data = rmalloc(sizeof(struct RastaIPData) * entr.value.array.count);
         cfg->values.redundancy.connections.count = entr.value.array.count;
         //check valid format
-        for (int i = 0; i < entr.value.array.count; i++) {
+        for (unsigned int i = 0; i < entr.value.array.count; i++) {
             struct RastaIPData ip = extractIPData(entr.value.array.data[i].c, i);
             if (ip.port == 0) {
                 logger_log(cfg->logger,LOG_LEVEL_ERROR, cfg->filename, "RASTA_REDUNDANCY_CONNECTIONS may only contain strings in format ip:port or *:port");

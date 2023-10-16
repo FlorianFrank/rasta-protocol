@@ -14,7 +14,7 @@ void generateSiphash24(const unsigned char* data, int data_length, const unsigne
         default:
             // default no checksum
             // if no hash is wanted, return 8 zero bytes
-            memset(result, 8, 0);
+            memset(result, 0, 8);
             break;
     }
 }
@@ -175,16 +175,22 @@ int siphash(const uint8_t *in, const size_t inlen, const uint8_t *k,
     switch (left) {
         case 7:
             b |= ((uint64_t)in[6]) << 48;
+            break;
         case 6:
             b |= ((uint64_t)in[5]) << 40;
+            break;
         case 5:
             b |= ((uint64_t)in[4]) << 32;
+            break;
         case 4:
             b |= ((uint64_t)in[3]) << 24;
+            break;
         case 3:
             b |= ((uint64_t)in[2]) << 16;
+            break;
         case 2:
             b |= ((uint64_t)in[1]) << 8;
+            break;
         case 1:
             b |= ((uint64_t)in[0]);
             break;
@@ -231,17 +237,17 @@ int halfsiphash(const uint8_t *in, const size_t inlen, const uint8_t *k,
                 uint8_t *out, const size_t outlen) {
 
     assert((outlen == 4) || (outlen == 8));
-    uint32_t v0 = 0;
-    uint32_t v1 = 0;
-    uint32_t v2 = 0x6c796765;
-    uint32_t v3 = 0x74656462;
-    uint32_t k0 = U8TO32_LE(k);
-    uint32_t k1 = U8TO32_LE(k + 4);
-    uint32_t m;
+    uint64_t v0 = 0;
+    uint64_t v1 = 0;
+    uint64_t v2 = 0x6c796765;
+    uint64_t v3 = 0x74656462;
+    uint64_t k0 = U8TO32_LE(k);
+    uint64_t k1 = U8TO32_LE(k + 4);
+    uint64_t m;
     int i;
-    const uint8_t *end = in + inlen - (inlen % sizeof(uint32_t));
+    const uint8_t *end = in + inlen - (inlen % sizeof(uint64_t));
     const int left = inlen & 3;
-    uint32_t b = ((uint32_t)inlen) << 24;
+    uint64_t  b = ((uint64_t )inlen) << 24;
     v3 ^= k1;
     v2 ^= k0;
     v1 ^= k1;
@@ -264,8 +270,10 @@ int halfsiphash(const uint8_t *in, const size_t inlen, const uint8_t *k,
     switch (left) {
         case 3:
             b |= ((uint32_t)in[2]) << 16;
+            break;
         case 2:
             b |= ((uint32_t)in[1]) << 8;
+            break;
         case 1:
             b |= ((uint32_t)in[0]);
             break;
